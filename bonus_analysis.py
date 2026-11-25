@@ -32,8 +32,11 @@ def run_voting_ablation(out: Path) -> pd.DataFrame:
     clean = preds[preds.condition == "clean"].copy()
     voted = clean.copy()
     for (_, _), grp in clean.groupby(["subject", "step"], sort=False):
-        for m in METHODS:
-            voted.loc[grp.index, m] = majority_vote_3(grp[m].tolist())
+        # Split into contiguous 5-sample-stride segments so voting never crosses filtered label gaps
+        seg_id = grp.center_index.diff().ne(5).cumsum()
+        for _, seg in grp.groupby(seg_id, sort=False):
+            for m in METHODS:
+                voted.loc[seg.index, m] = majority_vote_3(seg[m].tolist())
 
     rows = []
     for scheme, df in [("single_window", clean), ("vote3_smooth", voted)]:
