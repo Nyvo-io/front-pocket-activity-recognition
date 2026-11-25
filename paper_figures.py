@@ -2,6 +2,8 @@
 from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -31,6 +33,7 @@ plt.rcParams.update({
 })
 
 COLORS = ["#215278", "#a65628", "#2b7768", "#563f6c"]
+ACT_COLORS = ["#5C768D", "#E09F3E", "#2B7768", "#215278", "#B55A2A"]
 CN_LABELS = ["坐姿", "站立", "步行", "上楼", "下楼"]
 CN_MAP = dict(zip(CLASSES, CN_LABELS))
 
@@ -44,7 +47,7 @@ def examples():
     p = REPO / "demo/subject1"
     x, y = aligned(p / "test/Step1")
     t, c, _ = dictionary(p)
-    fig, axes = plt.subplots(2, 2, figsize=(7.05, 3.35), layout="constrained", sharex="col")
+    fig, axes = plt.subplots(2, 2, figsize=(7.05, 3.30), layout="constrained", sharex="col")
     start = next(i for i in range(len(x) - 39) if (y[i:i + 40] == "walk").all())
     win = next(i for i in range(20, len(x) - WINDOW) if (y[i - 20:i + WINDOW] == "walk").all())
     sample = x[win:win + WINDOW]
@@ -69,7 +72,7 @@ def examples():
 
 
 def confusion():
-    fig, axs = plt.subplots(1, 2, figsize=(6.35, 2.75), layout="constrained", sharey=True)
+    fig, axs = plt.subplots(1, 2, figsize=(6.35, 2.70), layout="constrained", sharey=True)
     im = None
     for ax, m, title in zip(axs, ["raw", "scaled"], ["(a) 原尺度融合", "(b) 按轴缩放融合"]):
         cm = pd.read_csv(REPO / "results" / f"confusion_{m}.csv", index_col=0).loc[CLASSES, CLASSES]
@@ -89,9 +92,38 @@ def confusion():
     save(fig, "confusion")
 
 
+def timeline():
+    frame = pd.read_csv(REPO / "results/predictions.csv")
+    sub = frame[(frame.condition == "clean") & (frame.subject == "subject2") & (frame.step == "Step1")].reset_index(drop=True)
+    cls_to_idx = {c: i for i, c in enumerate(CLASSES)}
+    rows_spec = [
+        ("truth", "真实标签"),
+        ("acc", f"单加速度计 ({(sub.acc == sub.truth).mean()*100:.1f}%)"),
+        ("gyro", f"单陀螺仪 ({(sub.gyro == sub.truth).mean()*100:.1f}%)"),
+        ("raw", f"原尺度融合 ({(sub.raw == sub.truth).mean()*100:.1f}%)"),
+        ("scaled", f"按轴缩放融合 ({(sub.scaled == sub.truth).mean()*100:.1f}%)"),
+    ]
+    mat = np.vstack([[cls_to_idx[v] for v in sub[col]] for col, _ in rows_spec])
+    cmap = ListedColormap(ACT_COLORS)
+
+    fig, ax = plt.subplots(figsize=(7.05, 1.95), layout="constrained")
+    ax.imshow(mat, aspect="auto", cmap=cmap, vmin=-0.5, vmax=4.5, interpolation="nearest")
+    for r in range(1, len(rows_spec)):
+        ax.axhline(r - 0.5, color="white", lw=1.6)
+    ax.set_yticks(range(len(rows_spec)))
+    ax.set_yticklabels([label for _, label in rows_spec])
+    ax.set_xlabel("连续测试窗口序号（第 2 名参与者，第 1 步，相邻窗间隔约 0.5 s）")
+    ax.tick_params(axis="y", length=0, pad=4)
+    ax.spines["left"].set_visible(False)
+    ax.spines["bottom"].set_linewidth(0.6)
+    handles = [Patch(facecolor=ACT_COLORS[i], edgecolor="none", label=CN_LABELS[i]) for i in range(5)]
+    ax.legend(handles=handles, ncol=5, frameon=False, loc="upper center", bbox_to_anchor=(0.5, 1.25), fontsize=8)
+    save(fig, "timeline")
+
+
 def trends():
     results = REPO / "results"
-    fig, ax = plt.subplots(figsize=(3.38, 2.25), layout="constrained")
+    fig, ax = plt.subplots(figsize=(3.38, 2.22), layout="constrained")
     lag = pd.read_csv(results / "lag_sweep.csv")
     for i, (m, label) in enumerate([("raw", "原尺度融合"), ("scaled", "按轴缩放融合")]):
         ax.plot(lag.lag, lag[m] * 100, ["o-", "s--"][i], ms=3.8, color=COLORS[i], label=label)
@@ -100,7 +132,7 @@ def trends():
     ax.legend(frameon=False, ncol=2, loc="upper center")
     save(fig, "lag")
 
-    fig, ax = plt.subplots(figsize=(3.38, 2.45), layout="constrained")
+    fig, ax = plt.subplots(figsize=(3.38, 2.38), layout="constrained")
     speed = pd.read_csv(results / "by_step.csv").set_index("step").loc[[f"Step3/{s}_walk" for s in ("slow", "normal", "fast")]]
     styles = [("acc", "单加速度计", "o-"), ("gyro", "单陀螺仪", "s--"), ("raw", "原尺度融合", "^:"), ("scaled", "按轴缩放融合", "d-.")]
     for i, (m, label, st) in enumerate(styles):
@@ -110,6 +142,24 @@ def trends():
     ax.legend(frameon=False, ncol=2, loc="lower center")
     save(fig, "speed")
 
+    ns_file = results / "noise_sweep.csv"
+    if ns_file.exists():
+        ns = pd.read_csv(ns_file)
+        fig, ax = plt.subplots(figsize=(3.38, 2.32), layout="constrained")
+        styles_n = [("acc", "单加速度计", "o-"), ("gyro", "单陀螺仪", "s--"), ("raw", "原尺度融合", "^-"), ("scaled", "按轴缩放融合", "d-.")]
+        for i, (m, label, st) in enumerate(styles_n):
+            part = ns[ns.method == m].sort_values("noise_sigma")
+            x = part.noise_sigma.to_numpy()
+            y = part.macro_recall_mean.to_numpy() * 100
+            s = part.macro_recall_std.to_numpy() * 100
+            ax.plot(x, y, st, ms=3.6, color=COLORS[i], label=label)
+            if np.any(s > 0):
+                ax.fill_between(x, y - s, y + s, color=COLORS[i], alpha=0.16, linewidth=0)
+        ax.set(xlabel="角速度噪声强度（训练标准差倍数）", ylabel="宏平均召回率 (%)", xticks=[0, 0.25, 0.5, 1.0, 1.5], ylim=(42, 76))
+        ax.grid(axis="y", ls=":", lw=0.45, alpha=0.5)
+        ax.legend(frameon=False, ncol=2, loc="lower left", fontsize=7.5)
+        save(fig, "noise")
+
 
 def error_slices():
     frame = pd.read_csv(REPO / "results/predictions.csv")
@@ -118,7 +168,7 @@ def error_slices():
     counts = pd.crosstab(walk.step, walk.raw).reindex(columns=CLASSES, fill_value=0)
     pct = 100 * counts.div(counts.sum(axis=1), axis=0)
 
-    fig, ax = plt.subplots(figsize=(3.42, 2.42), layout="constrained")
+    fig, ax = plt.subplots(figsize=(3.42, 2.38), layout="constrained")
     im = ax.imshow(pct, aspect="auto", cmap="Blues", vmin=0, vmax=100)
     for i, j in np.ndindex(pct.shape):
         val = pct.iloc[i, j]
@@ -138,7 +188,7 @@ def error_slices():
     cbar.ax.tick_params(labelsize=7.2)
     save(fig, "pose")
 
-    fig, ax = plt.subplots(figsize=(3.38, 2.35), layout="constrained")
+    fig, ax = plt.subplots(figsize=(3.38, 2.32), layout="constrained")
     x = np.arange(len(CLASSES))
     for i, (m, label) in enumerate([("raw", "原尺度融合"), ("scaled", "按轴缩放融合")]):
         recall = frame[m].eq(frame.truth).groupby([frame.condition, frame.truth]).mean().unstack()
@@ -156,5 +206,6 @@ def error_slices():
 if __name__ == "__main__":
     examples()
     confusion()
+    timeline()
     trends()
     error_slices()
